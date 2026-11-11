@@ -1,0 +1,35 @@
+# Build environment for build_couchbase_ee.sh on Ubuntu 24.04 (one of the
+# distributions IBM's script supports).
+#
+# Build this image ON AN s390x HOST (or pass --platform linux/s390x to run it
+# under QEMU emulation, which is only practical for trying out the first
+# stages - a full build under emulation takes days).
+#
+#   docker build -t couchbase-s390x-builder -f docker/Dockerfile.ubuntu24.04 docker/
+#
+# The image only contains what is needed to start the script; the script's
+# own "prereqs" stage installs the compilers and libraries inside the
+# container, exactly as it would on a bare host. See docker/run-build.sh.
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        sudo ca-certificates curl wget git openssh-client locales tzdata file xz-utils \
+ && locale-gen en_US.UTF-8 \
+ && rm -rf /var/lib/apt/lists/*
+
+# IBM's recipe expects a regular user with password-less sudo.
+ARG BUILD_UID=1000
+ARG BUILD_GID=1000
+RUN (getent group ${BUILD_GID} >/dev/null || groupadd -g ${BUILD_GID} builder) \
+ && (id -u ubuntu >/dev/null 2>&1 && userdel -r ubuntu || true) \
+ && useradd -m -u ${BUILD_UID} -g ${BUILD_GID} -s /bin/bash builder \
+ && echo 'builder ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/builder \
+ && chmod 0440 /etc/sudoers.d/builder
+
+ENV LANG=en_US.UTF-8
+USER builder
+WORKDIR /home/builder
+CMD ["/bin/bash"]

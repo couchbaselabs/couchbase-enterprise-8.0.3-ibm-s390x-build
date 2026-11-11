@@ -1,0 +1,60 @@
+diff --git a/secondary/platform/thp_linux.go b/secondary/platform/thp_linux.go
+index d89d585..0d1dac9 100644
+--- a/secondary/platform/thp_linux.go
++++ b/secondary/platform/thp_linux.go
+@@ -18,6 +18,7 @@ import (
+ 	"strconv"
+ 	"strings"
+ 	"syscall"
++	"unsafe"
+ 
+ 	"github.com/couchbase/indexing/secondary/logging"
+ )
+@@ -74,7 +75,10 @@ func getKernelVersion() (int, int) {
+ 		return 0, 0
+ 	}
+ 
+-	releaseStr := int8ToStr(uts.Release[:])
++	// syscall.Utsname's fields are [65]int8 on some architectures (amd64,
++	// arm64) and [65]uint8 on others (s390x, ppc64le, arm). View the array
++	// as int8 either way so this compiles and behaves the same everywhere.
++	releaseStr := int8ToStr((*[len(uts.Release)]int8)(unsafe.Pointer(&uts.Release))[:])
+ 
+ 	if len(releaseStr) == 0 {
+ 		logging.Warnf("failed to convert kernel release to string")
+diff --git a/secondary/vector/codebook/linux_openblas_s390x.go b/secondary/vector/codebook/linux_openblas_s390x.go
+new file mode 100644
+index 0000000..6f554ab
+--- /dev/null
++++ b/secondary/vector/codebook/linux_openblas_s390x.go
+@@ -0,0 +1,30 @@
++//go:build linux && s390x && !community
++// +build linux,s390x,!community
++
++package codebook
++
++// s390x port. As on arm64, the faiss library built for s390x is the "generic"
++// optimisation level, so it is named libfaiss (libfaiss_avx2 only exists on
++// amd64). OpenBLAS is statically linked into libfaiss, which re-exports the
++// two thread-control functions declared below.
++
++/*
++#cgo LDFLAGS: -lfaiss
++
++//declare these openblas functions here explicitly as the header file
++//is not available for these because openblas is statically linked to faiss.
++
++void openblas_set_num_threads(int);
++int  openblas_get_num_threads(void);
++*/
++import "C"
++
++// SetOpenBLASThreads sets the number of OpenBLAS threads.
++func SetOpenBLASThreadsInternal(n int) {
++	C.openblas_set_num_threads(C.int(n))
++}
++
++// GetOpenBLASThreads returns the current OpenBLAS thread cap (or 0 if unavailable).
++func GetOpenBLASThreadsInternal() int {
++	return int(C.openblas_get_num_threads())
++}

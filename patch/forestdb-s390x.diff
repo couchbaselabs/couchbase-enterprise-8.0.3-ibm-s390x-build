@@ -1,0 +1,13 @@
+diff --git a/src/arch.h b/src/arch.h
+index a96a1fc..b0be857 100644
+--- a/src/arch.h
++++ b/src/arch.h
+@@ -269,7 +269,7 @@
+         #define spin_destroy(arg) pthread_spin_destroy(arg)
+         #if defined(__i386__) || defined(__x86_64__)
+             #define SPIN_INITIALIZER (spin_t)(1)
+-        #elif defined(__arm__) || defined(__aarch64__)
++        #elif defined(__arm__) || defined(__aarch64__) || defined(__s390x__)
+             #define SPIN_INITIALIZER (spin_t)(0)
+         #else
+             #error Unsupported architecture for SPIN_INITIALIZER

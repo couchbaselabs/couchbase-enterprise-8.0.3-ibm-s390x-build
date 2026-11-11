@@ -1,0 +1,299 @@
+#!/usr/bin/env bash
+#
+# cbdep-linux-s390x - a small stand-in for Couchbase's `cbdep` tool on s390x.
+#
+# Why this exists
+# ---------------
+# The Couchbase Server build (tlm/cmake/Modules/CBDownloadDeps.cmake) fetches a
+# prebuilt `cbdep` binary from packages.couchbase.com/cbdep/cbdep-linux-<arch>
+# and uses it to install build-time tools: Go toolchains, rebar3 and - in an
+# Enterprise build - the JDK that Analytics is compiled and shipped with.
+# Couchbase only publishes cbdep for x86_64 and aarch64, and cbdep's own
+# package table has no s390x entries, so on s390x the download fails and CMake
+# stops.
+#
+# tlm only downloads cbdep when  <cache>/cbdep/cbdep-linux-<arch>  is missing.
+# The build script therefore installs this file there (default cache:
+# ~/.cbdepscache) before CMake runs. It implements the subset of
+#
+#     cbdep [--debug] [-p PLATFORM] [-a ARCH] install [-d DIR] [-n] [-C]
+#           [--cache-local-file FILE] PACKAGE VERSION
+#
+# that the server build uses, producing the same directory layout as the real
+# tool (see couchbase/cbdep: src/cbdep/cbdep.config and install.py):
+#
+#     golang VERSION          -> DIR/go<VERSION>
+#     openjdk VERSION         -> DIR/openjdk-<VERSION>        (Eclipse Temurin, s390x)
+#     rebar3 VERSION          -> DIR/rebar3-<VERSION>/bin/rebar3
+#     analytics-jars VERSION  -> DIR/analytics-jars-<VERSION>  (architecture independent)
+#     nodejs VERSION          -> DIR/nodejs-<VERSION>
+#     uv VERSION              -> DIR/uv-<VERSION>/bin/uv
+#     <cbdeps package> VER    -> DIR/<package>-<VER>           (from the local
+#                                cbdeps cache, i.e. packages you built yourself,
+#                                or the noarch package from packages.couchbase.com)
+#
+# Anything else fails loudly with the package name, so a new requirement shows
+# up as one clear error instead of a confusing download failure.
+#
+# Environment
+# -----------
+#   CBDEP_SHIM_JDK_HOME    Use this existing JDK for `openjdk` requests instead of
+#                          downloading Temurin (e.g. IBM Semeru, or an offline host).
+#   CBDEP_SHIM_PRINT_URL   If set to 1, print the URL that would be fetched and exit.
+#   CB_DOWNLOAD_DEPS_CACHE cbdeps cache directory (default ~/.cbdepscache).
+#
+set -euo pipefail
+
+SHIM_VERSION="1.0-s390x-shim"
+DOWNLOAD_CACHE="${HOME}/.cbdepcache/s390x-shim"
+CBDEPS_CACHE="${CB_DOWNLOAD_DEPS_CACHE:-${HOME}/.cbdepscache}"
+
+log() { echo "cbdep[s390x-shim]: $*" >&2; }
+die() { echo "cbdep[s390x-shim]: ERROR: $*" >&2; exit 1; }
+
+usage() {
+    cat >&2 <<EOF
+cbdep s390x stand-in ${SHIM_VERSION}
+usage: $(basename "$0") [--debug] [-p PLATFORM] [-a ARCH] install [-d DIR] [-n] [-C]
+                        [--cache-local-file FILE] PACKAGE VERSION
+       $(basename "$0") platform | list | -V
+supported packages: golang openjdk rebar3 analytics-jars nodejs uv, plus cbdeps
+packages present in ${CBDEPS_CACHE} (or published as noarch).
+EOF
+}
+
+# ---------------------------------------------------------------- global options
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --debug) set -x; shift ;;
+        -p|--platform|-a|--arch|--processor)
+            [ $# -ge 2 ] || die "option $1 needs a value"
+            shift 2 ;;
+        -V|--version) echo "cbdep version ${SHIM_VERSION}"; exit 0 ;;
+        -h|--help) usage; exit 0 ;;
+        -*) die "unknown option '$1'" ;;
+        *) break ;;
+    esac
+done
+
+command="${1:-}"
+[ -n "${command}" ] || { usage; exit 1; }
+shift
+
+case "${command}" in
+    install) ;;
+    platform) echo "['linux']"; echo "['s390x']"; exit 0 ;;
+    list)
+        echo "Available packages (s390x stand-in):"
+        printf '  %s\n' analytics-jars golang nodejs openjdk rebar3 uv
+        exit 0 ;;
+    *) die "command '${command}' is not implemented by the s390x stand-in" ;;
+esac
+
+# --------------------------------------------------------------- install options
+install_dir="install"
+cache_only=0
+force_cbdeps=0
+base_url=""
+local_file=""
+positional=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -d|--dir)            [ $# -ge 2 ] || die "$1 needs a value"; install_dir="$2"; shift 2 ;;
+        -n|--cache-only)     cache_only=1; shift ;;
+        -C|--cbdeps)         force_cbdeps=1; shift ;;
+        -b|--base-url)       [ $# -ge 2 ] || die "$1 needs a value"; base_url="$2"; shift 2 ;;
+        --cache-local-file)  [ $# -ge 2 ] || die "$1 needs a value"; local_file="$2"; cache_only=1; shift 2 ;;
+        -c|--config-file|-o|--output) [ $# -ge 2 ] || die "$1 needs a value"; shift 2 ;;
+        -r|--report|--recache) shift ;;
+        -3|--x32)            die "32-bit packages are not available on s390x" ;;
+        --)                  shift; positional+=("$@"); break ;;
+        -*)                  die "unknown install option '$1'" ;;
+        *)                   positional+=("$1"); shift ;;
+    esac
+done
+[ "${#positional[@]}" -eq 2 ] || { usage; die "install needs exactly PACKAGE and VERSION"; }
+package="${positional[0]}"
+version="${positional[1]}"
+
+mkdir -p "${DOWNLOAD_CACHE}"
+
+# ------------------------------------------------------------------- helpers
+# fetch URL [NAME] -> sets $fetched to the path of the cached download.
+# (Sets a variable rather than printing so it is never run in a subshell and
+# can stop the whole script.)
+fetched=""
+fetch() {
+    local url="$1" name
+    name="${2:-$(basename "${url%%\?*}")}"
+    local dest="${DOWNLOAD_CACHE}/${name}"
+    if [ "${CBDEP_SHIM_PRINT_URL:-0}" = "1" ]; then
+        echo "${url}"
+        exit 0
+    fi
+    if [ -n "${local_file}" ]; then
+        [ -f "${local_file}" ] || die "--cache-local-file: ${local_file} does not exist"
+        cp -f "${local_file}" "${dest}"
+    elif [ ! -s "${dest}" ]; then
+        log "downloading ${url}"
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL --retry 3 --retry-delay 5 -o "${dest}.part" "${url}" \
+                || { rm -f "${dest}.part"; die "download failed: ${url}"; }
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q -O "${dest}.part" "${url}" \
+                || { rm -f "${dest}.part"; die "download failed: ${url}"; }
+        else
+            die "neither curl nor wget is installed"
+        fi
+        mv -f "${dest}.part" "${dest}"
+    fi
+    fetched="${dest}"
+}
+
+# unpack ARCHIVE TOPLEVEL TARGET_NAME [WRAP]
+#   Extracts ARCHIVE, takes directory TOPLEVEL from it ("" = archive root),
+#   optionally wraps the contents in a directory called WRAP, and moves the
+#   result to <install_dir>/TARGET_NAME (replacing anything already there).
+unpack() {
+    local archive="$1" toplevel="$2" target_name="$3" wrap="${4:-}"
+    [ "${cache_only}" -eq 1 ] && { log "cache-only: not unpacking ${archive}"; return 0; }
+    mkdir -p "${install_dir}"
+    local abs_install tmp contents
+    abs_install="$(cd "${install_dir}" && pwd)"
+    tmp="$(mktemp -d "${abs_install}/.cbdep-shim.XXXXXX")"
+    mkdir "${tmp}/unpack"
+    tar -xf "${archive}" -C "${tmp}/unpack" || { rm -rf "${tmp}"; die "cannot extract ${archive}"; }
+    contents="${tmp}/unpack"
+    if [ -n "${toplevel}" ]; then
+        contents="${tmp}/unpack/${toplevel}"
+        [ -d "${contents}" ] || { rm -rf "${tmp}"; die "archive ${archive} has no directory '${toplevel}'"; }
+    fi
+    if [ -n "${wrap}" ]; then
+        mkdir "${tmp}/wrap"
+        mv "${contents}" "${tmp}/wrap/${wrap}"
+        contents="${tmp}/wrap"
+    fi
+    rm -rf "${abs_install:?}/${target_name}"
+    mv "${contents}" "${abs_install}/${target_name}"
+    rm -rf "${tmp}"
+    log "installed ${package} ${version} -> ${abs_install}/${target_name}"
+}
+
+# ------------------------------------------------------------------- packages
+install_golang() {
+    fetch "https://go.dev/dl/go${version}.linux-s390x.tar.gz"
+    unpack "${fetched}" "go" "go${version}"
+}
+
+install_openjdk() {
+    # Versions look like 21.0.4+7, 17.0.9+9 or 11.0.20.1+1 (and occasionally
+    # carry a ".N" repackaging suffix after the build number, as cbdep allows).
+    case "${version}" in *+*) ;; *) die "unsupported openjdk version '${version}' (expected e.g. 21.0.4+7)" ;; esac
+    local base="${version%%+*}" build="${version##*+}"
+    build="${build%%.*}"
+    local major="${base%%.*}"
+
+    if [ -n "${CBDEP_SHIM_JDK_HOME:-}" ]; then
+        [ -x "${CBDEP_SHIM_JDK_HOME}/bin/java" ] || die "CBDEP_SHIM_JDK_HOME=${CBDEP_SHIM_JDK_HOME} has no bin/java"
+        [ "${cache_only}" -eq 1 ] && return 0
+        mkdir -p "${install_dir}"
+        rm -rf "${install_dir:?}/openjdk-${version}"
+        cp -a "${CBDEP_SHIM_JDK_HOME}" "${install_dir}/openjdk-${version}"
+        log "installed openjdk ${version} from ${CBDEP_SHIM_JDK_HOME} -> ${install_dir}/openjdk-${version}"
+        return 0
+    fi
+
+    [ "${major}" -ge 11 ] 2>/dev/null || die "no s390x Temurin build exists for JDK ${major}; set CBDEP_SHIM_JDK_HOME to a JDK you provide"
+    local file="OpenJDK${major}U-jdk_s390x_linux_hotspot_${base}_${build}.tar.gz"
+    local tag="jdk-${base}%2B${build}"
+    fetch "https://github.com/adoptium/temurin${major}-binaries/releases/download/${tag}/${file}" "${file}"
+    unpack "${fetched}" "jdk-${base}+${build}" "openjdk-${version}"
+}
+
+install_rebar3() {
+    fetch "https://github.com/erlang/rebar3/releases/download/${version}/rebar3" "rebar3-${version}"
+    local script="${fetched}"
+    [ "${cache_only}" -eq 1 ] && return 0
+    command -v escript >/dev/null 2>&1 \
+        || die "escript not found in PATH; Erlang must be on PATH before installing rebar3"
+    mkdir -p "${install_dir}"
+    local target="${install_dir}/rebar3-${version}"
+    rm -rf "${target}"
+    mkdir -p "${target}/bin"
+    cp -f "${script}" "${target}/bin/rebar3"
+    chmod 0755 "${target}/bin/rebar3"
+    # Same follow-up the real cbdep runs: unpack rebar3's own libraries so
+    # later invocations start faster and do not depend on the escript archive.
+    REBAR_CACHE_DIR="${target}" "${target}/bin/rebar3" local install >&2 \
+        || log "warning: 'rebar3 local install' failed; the escript itself is still usable"
+    log "installed rebar3 ${version} -> ${target}/bin/rebar3"
+}
+
+install_analytics_jars() {
+    # Architecture independent (Java bytecode).
+    local mmp
+    mmp="$(echo "${version}" | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+).*/\1/')"
+    local root="${base_url:-https://packages.couchbase.com/releases}"
+    fetch "${root}/${mmp}/analytics-jars-${version}.tar.gz"
+    unpack "${fetched}" "" "analytics-jars-${version}"
+}
+
+install_nodejs() {
+    fetch "https://nodejs.org/dist/v${version}/node-v${version}-linux-s390x.tar.gz"
+    unpack "${fetched}" "node-v${version}-linux-s390x" "nodejs-${version}"
+}
+
+install_uv() {
+    fetch "https://github.com/astral-sh/uv/releases/download/${version}/uv-s390x-unknown-linux-gnu.tar.gz" "uv-${version}-s390x-unknown-linux-gnu.tar.gz"
+    unpack "${fetched}" "uv-s390x-unknown-linux-gnu" "uv-${version}" "bin"
+}
+
+# "cbdeps" packages (third-party libraries prebuilt by Couchbase). There are no
+# s390x builds on packages.couchbase.com, so use what the build script put in
+# the local cbdeps cache, or the noarch build if Couchbase publishes one.
+install_cbdeps_package() {
+    local candidate
+    for candidate in \
+        "${CBDEPS_CACHE}/${package}-linux-s390x-${version}.tgz" \
+        "${CBDEPS_CACHE}/${package}-all-noarch-${version}.tgz"; do
+        if [ -f "${candidate}" ]; then
+            unpack "${candidate}" "" "${package}-${version}"
+            return 0
+        fi
+    done
+    local ver_only="${version%-*}" bld="${version##*-}" url
+    for url in \
+        "https://packages.couchbase.com/couchbase-server/deps/${package}/${version}/${package}-all-noarch-${version}.tgz" \
+        "https://packages.couchbase.com/couchbase-server/deps/${package}/${ver_only}/${bld}/${package}-all-noarch-${version}.tgz"; do
+        if [ "${CBDEP_SHIM_PRINT_URL:-0}" = "1" ]; then echo "${url}"; exit 0; fi
+        if command -v curl >/dev/null 2>&1 && curl -fsIL "${url}" >/dev/null 2>&1; then
+            fetch "${url}"
+            unpack "${fetched}" "" "${package}-${version}"
+            return 0
+        fi
+    done
+    die "no s390x build of cbdeps package '${package}' ${version} is available.
+       Build it for s390x and place it in ${CBDEPS_CACHE} as
+       ${package}-linux-s390x-${version}.tgz (plus the matching .md5)."
+}
+
+if [ "${force_cbdeps}" -eq 1 ]; then
+    install_cbdeps_package
+    exit 0
+fi
+
+case "${package}" in
+    golang)          install_golang ;;
+    openjdk)         install_openjdk ;;
+    rebar3)          install_rebar3 ;;
+    analytics-jars)  install_analytics_jars ;;
+    nodejs)          install_nodejs ;;
+    uv)              install_uv ;;
+    boost|breakpad|curl|double-conversion|erlang|flatbuffers|flex|folly|gflags|glog|gperftools|grpc|icu4c|jemalloc|json|libcouchbase|libcxx|libevent|libsqlite3|libstdcxx|libuv|lz4|maven|numactl|openblas|openjdk-rt|openssl|pcre|rocksdb|snappy|v8|zlib)
+                     install_cbdeps_package ;;
+    *)
+        die "package '${package}' (version ${version}) is not handled by the s390x cbdep stand-in.
+       The real cbdep tool has no s390x support either. Add a case for it to
+       $(readlink -f "$0" 2>/dev/null || echo "$0")
+       (see couchbase/cbdep src/cbdep/cbdep.config for the upstream definition)." ;;
+esac

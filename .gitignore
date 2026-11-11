@@ -1,0 +1,13 @@
+# Local settings (may name internal hosts or paths)
+build.conf
+
+# Patches against Couchbase's private repositories must not be published.
+# Keep them here locally; only the README and the example are tracked.
+patch/local/*
+!patch/local/README.md
+!patch/local/series.example
+
+# Build output, if the workspace is placed inside this checkout
+/workspace/
+/packages/
+*.log

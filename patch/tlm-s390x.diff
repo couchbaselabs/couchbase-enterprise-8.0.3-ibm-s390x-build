@@ -1,0 +1,116 @@
+diff --git a/cmake/Modules/FindCouchbaseBreakpad.cmake b/cmake/Modules/FindCouchbaseBreakpad.cmake
+index 5ceafdb..8073c26 100644
+--- a/cmake/Modules/FindCouchbaseBreakpad.cmake
++++ b/cmake/Modules/FindCouchbaseBreakpad.cmake
+@@ -24,6 +24,13 @@ if (NOT DEFINED BREAKPAD_FOUND)
+     include(PlatformIntrospection)
+ 
+     cb_get_supported_platform(_is_supported_platform)
++    # s390x: Google Breakpad has no s390x port and there is no cbdeps
++    # package for it, so behave as on an "unsupported" platform. This has
++    # to live here (not just in the top-level CMakeLists.txt) because
++    # Enterprise-only projects such as eventing INCLUDE this module again.
++    if (CMAKE_SYSTEM_PROCESSOR MATCHES "^s390x")
++        set(_is_supported_platform 0)
++    endif ()
+     if (_is_supported_platform AND NOT APPLE)
+         string(TOLOWER ${CMAKE_SYSTEM_NAME} LCASE_SYSTEM)
+ 
+diff --git a/cmake/Modules/FindCouchbaseErlang.cmake b/cmake/Modules/FindCouchbaseErlang.cmake
+index e2eb48b..7bee133 100644
+--- a/cmake/Modules/FindCouchbaseErlang.cmake
++++ b/cmake/Modules/FindCouchbaseErlang.cmake
+@@ -79,6 +79,13 @@ IF (NOT FindCouchbaseErlang_INCLUDED)
+     UNSET(REBAR_SCRIPT CACHE)
+     SET (_need_rebar_install TRUE)
+   ENDIF()
++  # =================================================================
++  # 1. force  REBAR_SCRIPT to point to local rebar3
++  SET(REBAR_SCRIPT "/usr/local/bin/rebar3" CACHE FILEPATH "/usr/local/bin/rebar3" FORCE)
++  # 2. do not install rebar3
++  SET(_need_rebar_install FALSE)
++  MESSAGE(STATUS "Using system local rebar3 on s390x: ${REBAR_SCRIPT}")
++  # =================================================================
+ 
+   IF (_need_rebar_install AND ESCRIPT_EXECUTABLE)
+     MESSAGE(STATUS "rebar3 not found, installing via cbdep...")
+diff --git a/cmake/Modules/FindCouchbaseGo.cmake b/cmake/Modules/FindCouchbaseGo.cmake
+index 85157f9..4f61071 100644
+--- a/cmake/Modules/FindCouchbaseGo.cmake
++++ b/cmake/Modules/FindCouchbaseGo.cmake
+@@ -150,6 +150,38 @@ IF (NOT FindCouchbaseGo_INCLUDED)
+   #   USAGE - usage of TARGET
+   #   UNSHIPPED - true if TARGET is not a shipped deliverable
+   MACRO (GET_GOROOT VERSION var ver TARGET USAGE UNSHIPPED)
++    # ================== [s390x ] ==================
++    _DETERMINE_ARCH (_arch)
++    IF (_arch STREQUAL "s390x")
++      IF (DEFINED ENV{GOROOT})
++        SET (${var} "$ENV{GOROOT}")
++      ELSE ()
++        EXECUTE_PROCESS (
++          COMMAND go env GOROOT
++          OUTPUT_VARIABLE _sys_goroot
++          OUTPUT_STRIP_TRAILING_WHITESPACE
++          ERROR_QUIET
++        )
++        IF (_sys_goroot)
++          SET (${var} "${_sys_goroot}")
++        ELSE ()
++          SET (${var} "/usr/local/go") # peace mind
++        ENDIF ()
++      ENDIF ()
++
++      SET (${ver} "1.26.3") # set go version
++      MESSAGE (STATUS "s390x Porting [EARLY INTERCEPT]: Forcing GOROOT to system path: ${${var}}")
++
++      SET (_ver_final "1.26.3")
++      SAVE_GO_TARGET ("1.26.3" "${VERSION}" ${TARGET} ${USAGE} ${UNSHIPPED})
++
++      SET (_is_s390x_intercepted TRUE)
++    ELSE ()
++      SET (_is_s390x_intercepted FALSE)
++    ENDIF ()
++    # ================== [s390x ] ==================
++
++    IF (NOT _is_s390x_intercepted)
+     SET (_request_version ${VERSION})
+ 
+     # If one of the constant Go versions is specified, read in the
+@@ -219,6 +251,7 @@ IF (NOT FindCouchbaseGo_INCLUDED)
+     GET_GO_VERSION ("${_ver_final}" ${var})
+     SET (${ver} ${_ver_final})
+     SAVE_GO_TARGET (${_ver_final} ${_request_version} ${TARGET} ${USAGE} ${UNSHIPPED})
++    ENDIF (NOT _is_s390x_intercepted)
+   ENDMACRO (GET_GOROOT)
+ 
+   # Save a Go version usage, keyed by final Go version, as well as updating the
+diff --git a/cmake/Modules/PlatformIntrospection.cmake b/cmake/Modules/PlatformIntrospection.cmake
+index ef3988f..72afeff 100644
+--- a/cmake/Modules/PlatformIntrospection.cmake
++++ b/cmake/Modules/PlatformIntrospection.cmake
+@@ -254,8 +254,10 @@ IF (NOT PlatformIntrospection_INCLUDED)
+          "linux"
+          "macosx"
+          "rhel8"
++	 "rhel9"
++         "rhel10"
+          "suse12" "suse15"
+-         "ubuntu16.04" "ubuntu18.04" "ubuntu20.04"
++	 "ubuntu16.04" "ubuntu18.04" "ubuntu20.04" "ubuntu 22.04" "ubuntu 24.04" "ubuntu 25.10"
+          "windows_msvc2017"
+          "windows_msvc2022")
+     LIST (FIND _supported_platforms ${_platform} _index)
+diff --git a/deps/manifest.cmake b/deps/manifest.cmake
+index 297ee71..2ddbacf 100644
+--- a/deps/manifest.cmake
++++ b/deps/manifest.cmake
+@@ -18,7 +18,7 @@
+ #
+ DECLARE_DEP (AWSSDK V2 VERSION 1.11.450 BUILD 2 PLATFORMS linux macosx)
+ DECLARE_DEP (benchmark VERSION v1.9.1-cb1 PLATFORMS linux macosx windows)
+-DECLARE_DEP (breakpad V2 VERSION 2022.07.12 BUILD 1 PLATFORMS linux windows)
++#DECLARE_DEP (breakpad V2 VERSION 2022.07.12 BUILD 1 PLATFORMS linux windows)
+ DECLARE_DEP (boost VERSION 1.86.0-cb3 PLATFORMS linux macosx windows)
+ DECLARE_DEP (cbpy V2 VERSION 3.14.2 BUILD 4 PLATFORMS linux macosx windows DESTINATION "${CMAKE_INSTALL_PREFIX}/lib/python/interp")
+ DECLARE_DEP (curl V2 VERSION 8.21.0 BUILD 2 PLATFORMS linux macosx windows)

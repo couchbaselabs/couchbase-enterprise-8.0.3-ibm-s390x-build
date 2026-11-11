@@ -1,0 +1,30 @@
+Couchbase Server 8.0.3 Enterprise Edition build kit for Linux on IBM Z (s390x)
+
+This repository contains material derived from "scripts" by the Linux on IBM Z
+open-source ecosystem team:
+
+    https://github.com/linux-on-ibm-z/scripts
+    Couchbase/8.0.3/build_couchbase.sh and Couchbase/8.0.3/patch/*
+    commit da0867d01803bc8a5379dfbc8bd79d68cbdce940 (2026-11-05)
+    © Copyright IBM Corporation 2026
+    Licensed under the Apache License, Version 2.0
+
+  * build_couchbase_ee.sh is a modified version of IBM's build_couchbase.sh.
+    The functions marked "# [IBM]" are IBM's; the changes are described in
+    docs/DIFFERENCES-FROM-IBM.md.
+  * patch/kv_engine.diff, patch/platform.diff, patch/flatbuffers.diff,
+    patch/folly.diff, patch/v8.diff and patch/aws-c-cal.diff are IBM's files,
+    unmodified.
+  * patch/tlm-s390x.diff is a modified version of IBM's tlm.diff.
+  * upstream/linux-on-ibm-z-scripts/ holds unmodified copies of IBM's script
+    and patches, and the text of the Apache License 2.0
+    (upstream/linux-on-ibm-z-scripts/LICENSE-Apache-2.0.txt).
+
+The patches modify source code that belongs to Couchbase, Inc. and to the
+respective third-party projects, under those projects' own licenses.
+
+Couchbase Server Enterprise Edition is proprietary software of Couchbase, Inc.
+This kit contains none of its source code; building the Enterprise Edition
+requires authorised access to Couchbase's private repositories. Binaries
+produced with this kit are unofficial builds for a platform Couchbase does not
+ship or support.

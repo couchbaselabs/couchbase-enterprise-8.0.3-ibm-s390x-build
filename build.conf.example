@@ -1,0 +1,90 @@
+# Settings for build_couchbase_ee.sh.
+#
+# Copy this file to build.conf (next to the script) and edit it, or point the
+# script at another file with --config. Everything here is optional: the values
+# shown are the defaults. Command-line options override this file.
+#
+# The file is sourced by bash, so use VAR=value with no spaces around "=".
+
+# ----------------------------------------------------------------- what to build
+
+# enterprise or community. Enterprise needs read access to Couchbase's private
+# GitHub repositories (see CB_GIT_AUTH below).
+CB_EDITION=enterprise
+
+# Build number shown in the product version (8.0.3-<number>). 9999 is the
+# number Couchbase itself uses for from-source (escrow) builds; the official
+# 8.0.3 release is build 5933.
+CB_BLD_NUM=9999
+
+# RelWithDebInfo is what Couchbase ships. DebugOptimized is what IBM's script
+# (and Couchbase's Build.sh) build by default: slower binaries, more checks.
+CB_BUILD_TYPE=RelWithDebInfo
+
+# Build workspace: sources, dependency build trees, logs. Needs ~100 GB.
+# SOURCE_ROOT=$HOME/couchbase-s390x-build
+
+# Install prefix. Leave unset to install inside the workspace
+# (<workspace>/couchbase/install). Set to /opt/couchbase for a build you want
+# to package and install on other machines; the directory must exist and be
+# writable by the build user:
+#     sudo mkdir -p /opt/couchbase && sudo chown "$USER" /opt/couchbase
+# CB_PREFIX=/opt/couchbase
+
+# ------------------------------------------------------------------ the source
+
+# Release manifest to build from.
+CB_MANIFEST_URL=https://github.com/couchbase/manifest
+CB_MANIFEST_FILE=released/couchbase-server/8.0.3.xml
+
+# Manifest groups to sync. Leave unset for the edition's default
+# (enterprise: default,enterprise,packaging - community: the default group).
+# CB_SYNC_GROUPS=
+
+# Leave these Enterprise services out (they are then missing from the build).
+CB_WITHOUT_ANALYTICS=0
+CB_WITHOUT_BACKUP=0
+
+# Further manifest project names to leave out of the sync, space separated.
+CB_EXCLUDE_PROJECTS=""
+
+# Extra arguments for "repo init", e.g. "--depth=1" for a much smaller and
+# faster shallow sync (fine for building; no git history in the checkouts).
+CB_REPO_INIT_ARGS=""
+CB_SYNC_JOBS=6
+
+# How this machine authenticates to github.com/couchbase:
+#   ssh    an SSH key with access, loaded in ssh-agent or in ~/.ssh (default)
+#   https  a token in the GITHUB_TOKEN environment variable (never put the
+#          token in this file)
+CB_GIT_AUTH=ssh
+
+# Go module paths fetched straight from GitHub with the credentials above
+# instead of through proxy.golang.org (needed for private modules).
+CB_GOPRIVATE=github.com/couchbase
+
+# ------------------------------------------------------------------- the build
+
+# Parallel compile jobs for the server build. Default: one per CPU, limited to
+# one per 2 GB of RAM. IBM's script uses 4.
+# CB_JOBS=8
+CB_PARALLEL_LINK_JOBS=2
+
+# OFF matches Couchbase's production builds (less memory per compiler process,
+# clearer errors). ON is the developer default and what IBM's script used.
+CB_UNITY_BUILD=OFF
+
+# Analytics: download a JDK (Eclipse Temurin for s390x, via the cbdep stand-in)
+# and build the Java code with Maven, as Couchbase's own build does.
+CB_DOWNLOAD_JAVA=True
+CB_INVOKE_MAVEN=True
+
+# Build libcurl with TLS, as Couchbase does (1). 0 falls back to IBM's recipe,
+# which has no TLS: Eventing's curl() then cannot reach https:// URLs.
+CB_CURL_TLS=1
+
+# Anything else to pass to CMake, e.g. "-DCB_DEVELOPMENT_ASSERTS=ON".
+CB_EXTRA_CMAKE_OPTIONS=""
+
+# 1 prints every command to the log (as IBM's script does); 0 is quieter.
+CB_TRACE=1
